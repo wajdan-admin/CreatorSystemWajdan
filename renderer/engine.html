@@ -1,0 +1,292 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#000;}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+/* ============================================================
+   WAJDAN FACELESS MOTION ENGINE  v0
+   Deterministic: draw(t) renders the exact same pixels for the
+   same t, every time. No realtime, no rAF. The exporter steps t.
+   ============================================================ */
+
+const S = window.SCENE;
+const T = S.tokens;
+const W = T.width, H = T.height;
+const cv = document.getElementById('c');
+cv.width = W; cv.height = H;
+const x = cv.getContext('2d');
+
+/* ---------- easing ---------- */
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const E = {
+  linear:  p => p,
+  outCubic: p => 1 - Math.pow(1 - p, 3),
+  outQuint: p => 1 - Math.pow(1 - p, 5),
+  inCubic:  p => p * p * p,
+  inOut:    p => p < .5 ? 4*p*p*p : 1 - Math.pow(-2*p + 2, 3) / 2,
+  outBack:  p => { const c1=1.70158, c3=c1+1; return 1 + c3*Math.pow(p-1,3) + c1*Math.pow(p-1,2); },
+  outElastic: p => { if(p===0||p===1) return p; const c4=(2*Math.PI)/3;
+                     return Math.pow(2,-10*p)*Math.sin((p*10-0.75)*c4)+1; }
+};
+/* progress of t across [a,b], eased */
+const seg = (t,a,b,ease='outCubic') => E[ease](clamp01((t-a)/(b-a)));
+const lerp = (a,b,p) => a + (b-a)*p;
+
+/* deterministic pseudo-random, seeded per index */
+function rnd(i, salt){ const v = Math.sin(i*127.1 + (salt||0)*311.7) * 43758.5453; return v - Math.floor(v); }
+
+/* ---------- primitives ---------- */
+function dot(cx, cy, r, fill, alpha){
+  x.globalAlpha = alpha===undefined?1:alpha;
+  x.fillStyle = fill; x.beginPath(); x.arc(cx, cy, r, 0, 6.2832); x.fill();
+  x.globalAlpha = 1;
+}
+function ring(cx, cy, r, stroke, lw, alpha){
+  x.globalAlpha = alpha===undefined?1:alpha;
+  x.strokeStyle = stroke; x.lineWidth = lw||3;
+  x.beginPath(); x.arc(cx, cy, r, 0, 6.2832); x.stroke();
+  x.globalAlpha = 1;
+}
+function line(x1,y1,x2,y2,stroke,lw,alpha){
+  x.globalAlpha = alpha===undefined?1:alpha;
+  x.strokeStyle=stroke; x.lineWidth=lw||3; x.lineCap='round';
+  x.beginPath(); x.moveTo(x1,y1); x.lineTo(x2,y2); x.stroke();
+  x.globalAlpha=1;
+}
+function glow(color, blur){ x.shadowColor = color; x.shadowBlur = blur; }
+function noGlow(){ x.shadowBlur = 0; x.shadowColor = 'transparent'; }
+
+/* ---------- caption system ----------
+   The reference format splits a phrase across two fixed zones,
+   top ~25% and bottom ~78%, with the animation living between. */
+const TOP_Y = Math.round(H * 0.25);
+const BOT_Y = Math.round(H * 0.78);
+
+function caption(text, yy, t0, t1, color, size){
+  if(!text) return;
+  // fade in over 0.25s, hold, fade out over 0.2s
+  const fin  = clamp01((t1 - 0) / 1);
+  const a = Math.min(seg(t0, 0, 0.25, 'outCubic'), 1 - seg(t0, (t1-0.20), t1, 'inCubic'));
+  if(a <= 0.001) return;
+  // slight rise on entry
+  const dy = lerp(10, 0, seg(t0, 0, 0.35, 'outQuint'));
+  x.save();
+  x.globalAlpha = a;
+  x.fillStyle = color || T.text;
+  x.font = `600 ${size||25}px Poppins, Inter, sans-serif`;
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  if ('letterSpacing' in x) x.letterSpacing = '3.5px';
+  x.fillText(text.toUpperCase(), W/2, yy + dy);
+  x.restore();
+}
+
+/* ============================================================
+   ICON SYSTEM
+   Icons are SVG paths on a 0-100 box. We measure each sub-path
+   with the real SVG engine so draw-on can run along true arc
+   length, which is what makes it look hand-drawn rather than
+   like a wipe.
+   ============================================================ */
+const ICONS = S.icons || {};
+const _svgNS = 'http://www.w3.org/2000/svg';
+const _measure = document.createElementNS(_svgNS, 'svg');
+_measure.setAttribute('width', '0'); _measure.setAttribute('height', '0');
+document.body.appendChild(_measure);
+
+const _cache = {};
+function iconData(name){
+  if (_cache[name]) return _cache[name];
+  const ic = ICONS[name];
+  if (!ic) throw new Error('unknown icon: ' + name);
+  const subs = ic.p.map(d => {
+    const el = document.createElementNS(_svgNS, 'path');
+    el.setAttribute('d', d);
+    _measure.appendChild(el);
+    return { d, len: el.getTotalLength(), path2d: new Path2D(d) };
+  });
+  const total = subs.reduce((a, s) => a + s.len, 0);
+  _cache[name] = { subs, total, accent: new Set(ic.accent || []), fillPath: ic.fillPath };
+  return _cache[name];
+}
+
+/* draw an icon centred at (cx,cy), `size` px across the 100-box.
+   opts: { draw   0..1  draw-on progress (1 = fully drawn)
+           fill   0..1  accent fill-rise height inside fillPath
+           alpha, lw, color, accentColor, glow } */
+function icon(name, cx, cy, size, opts){
+  const o = opts || {};
+  const D = iconData(name);
+  const k = size / 100;
+  const p = o.draw === undefined ? 1 : clamp01(o.draw);
+  const lw = (o.lw || 3) / k;
+
+  x.save();
+  x.globalAlpha = o.alpha === undefined ? 1 : o.alpha;
+  x.translate(cx - size/2, cy - size/2);
+  x.scale(k, k);
+  x.lineWidth = lw; x.lineCap = 'round'; x.lineJoin = 'round';
+  if (o.glow) glow(o.glow, 18 / k);
+
+  /* accent fill rising inside the icon's closed path */
+  if (o.fill > 0 && D.fillPath !== undefined){
+    x.save();
+    x.clip(D.subs[D.fillPath].path2d);
+    x.fillStyle = o.accentColor || T.accent;
+    const h = 100 * clamp01(o.fill);
+    x.fillRect(0, 100 - h, 100, h);
+    x.restore();
+  }
+
+  /* draw-on, distributed across sub-paths by true arc length */
+  let drawn = D.total * p;
+  for (let i = 0; i < D.subs.length; i++){
+    const s = D.subs[i];
+    if (drawn <= 0) break;
+    const seen = Math.min(s.len, drawn);
+    drawn -= seen;
+    x.strokeStyle = D.accent.has(i) ? (o.accentColor || T.accent) : (o.color || T.text);
+    if (seen < s.len - 0.01){
+      x.setLineDash([s.len, s.len]);
+      x.lineDashOffset = s.len - seen;
+    } else {
+      x.setLineDash([]);
+    }
+    x.stroke(s.path2d);
+  }
+  x.setLineDash([]);
+  noGlow();
+  x.restore();
+}
+window.icon = icon;
+
+/* ============================================================
+   THE SCENE
+   One continuous particle system across the whole runtime, so
+   there is never a cut. Phases retarget the same objects.
+   ============================================================ */
+const N = S.particles || 40;
+
+/* per-particle constants, stable for the whole render */
+const P = [];
+for (let i = 0; i < N; i++){
+  const ang = (i / N) * Math.PI * 2 + rnd(i,1) * 0.35;
+  const rad = 150 + rnd(i,2) * 120;
+  P.push({
+    i,
+    startX: rnd(i,3) * W,
+    startY: -60 - rnd(i,4) * 700,          // staggered above frame
+    clusterX: W/2 + Math.cos(ang) * rad * 0.9,
+    clusterY: H/2 + Math.sin(ang) * rad * 0.55,
+    fallDelay: rnd(i,5) * 0.9,
+    r: 7 + rnd(i,6) * 5,
+    keep: false                             // set below
+  });
+}
+/* the three that stay qualified: spread them out visually */
+[3, 17, 29].forEach(k => { if(P[k]) P[k].keep = true; });
+const KEEP = P.filter(p => p.keep);
+const DROP = P.filter(p => !p.keep);
+
+/* phase boundaries (seconds) */
+const PH = S.phases;
+
+function draw(t){
+  /* background */
+  x.fillStyle = T.bg; x.fillRect(0,0,W,H);
+
+  /* ---------- captions ---------- */
+  for (const b of S.beats){
+    if (t >= b.start && t < b.end){
+      const lt = t - b.start, span = b.end - b.start;
+      caption(b.top,    TOP_Y, lt, span, T.text, b.size || 25);
+      caption(b.bottom, BOT_Y, lt, span, b.bottomColor === 'accent' ? T.accent
+                                        : b.bottomColor === 'secondary' ? T.secondary
+                                        : T.text, b.size || 25);
+    }
+  }
+
+  const cxm = W/2, cym = H/2;
+
+  /* ---------- particles ---------- */
+  for (const p of P){
+    /* PHASE 1 — rain in to cluster */
+    const pin = seg(t, PH.rainStart + p.fallDelay, PH.rainStart + p.fallDelay + 1.1, 'outQuint');
+    let px = lerp(p.startX, p.clusterX, pin);
+    let py = lerp(p.startY, p.clusterY, pin);
+    let alpha = pin > 0 ? 1 : 0;
+    let r = p.r;
+    let fill = T.accent;
+
+    /* PHASE 2 — sort: the unqualified drain of colour */
+    const sort = seg(t, PH.sortStart, PH.sortStart + 0.7, 'inOut');
+    if (!p.keep && sort > 0){
+      fill = T.dim;
+      alpha = lerp(1, 0.55, sort);
+      r = lerp(p.r, p.r * 0.78, sort);
+    }
+
+    /* PHASE 3 — the unqualified fall out of frame */
+    if (!p.keep){
+      const out = seg(t, PH.dropStart + rnd(p.i,7)*0.45, PH.dropStart + 1.0 + rnd(p.i,7)*0.45, 'inCubic');
+      py += out * (H * 0.9);
+      alpha *= (1 - out);
+    }
+
+    /* PHASE 4 — the three that stay converge to centre and merge */
+    if (p.keep){
+      const k = KEEP.indexOf(p);
+      const conv = seg(t, PH.convStart, PH.convStart + 1.0, 'inOut');
+      px = lerp(px, cxm, conv);
+      py = lerp(py, cym, conv);
+      /* grow into one mass as they land */
+      const merge = seg(t, PH.convStart + 0.75, PH.convStart + 1.35, 'outBack');
+      r = lerp(r, 62 / KEEP.length, merge);
+      if (merge > 0 && k !== 0) alpha = lerp(alpha, 0, seg(t, PH.convStart+0.9, PH.convStart+1.2,'outCubic'));
+    }
+
+    if (alpha > 0.002){
+      if (p.keep && t > PH.convStart) { glow(T.accent, 26); }
+      dot(px, py, r, fill, alpha);
+      noGlow();
+    }
+  }
+
+  /* ---------- the merged mass + end card ---------- */
+  if (t >= PH.convStart + 0.75){
+    const grow = seg(t, PH.convStart + 0.75, PH.convStart + 1.4, 'outBack');
+    const R = lerp(10, 66, grow);
+    glow(T.accent, 34);
+    dot(cxm, cym, R, T.accent, 1);
+    noGlow();
+    /* one clean ring pulses out — the "qualified call" landing */
+    const pr = seg(t, PH.convStart + 1.15, PH.convStart + 2.1, 'outCubic');
+    if (pr > 0 && pr < 1) ring(cxm, cym, lerp(66, 185, pr), T.accent, 2.5, (1-pr)*0.55);
+  }
+
+  /* handle, last beat only */
+  if (t >= PH.endStart){
+    const a = seg(t, PH.endStart, PH.endStart + 0.5, 'outCubic');
+    x.save();
+    x.globalAlpha = a;
+    x.fillStyle = T.secondary;
+    x.font = `500 21px Inter, Poppins, sans-serif`;
+    if ('letterSpacing' in x) x.letterSpacing = '2px';
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(T.handle, W/2, H * 0.88);
+    x.restore();
+  }
+}
+
+window.draw = draw;
+window.__ready = true;
+</script>
+</body>
+</html>
