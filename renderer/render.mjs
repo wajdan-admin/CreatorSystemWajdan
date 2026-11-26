@@ -19,6 +19,7 @@ const outDir    = process.argv[3];
 const scene  = JSON.parse(fs.readFileSync(scenePath, 'utf8'));
 const tokens = JSON.parse(fs.readFileSync(path.join(__dir, '..', 'brand', 'tokens.json'), 'utf8'));
 scene.tokens = tokens;
+scene.icons  = JSON.parse(fs.readFileSync(path.join(__dir, 'icons.json'), 'utf8'));
 
 const fps  = tokens.fps;
 const sub  = tokens.subframes;

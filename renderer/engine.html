@@ -89,6 +89,85 @@ function caption(text, yy, t0, t1, color, size){
 }
 
 /* ============================================================
+   ICON SYSTEM
+   Icons are SVG paths on a 0-100 box. We measure each sub-path
+   with the real SVG engine so draw-on can run along true arc
+   length, which is what makes it look hand-drawn rather than
+   like a wipe.
+   ============================================================ */
+const ICONS = S.icons || {};
+const _svgNS = 'http://www.w3.org/2000/svg';
+const _measure = document.createElementNS(_svgNS, 'svg');
+_measure.setAttribute('width', '0'); _measure.setAttribute('height', '0');
+document.body.appendChild(_measure);
+
+const _cache = {};
+function iconData(name){
+  if (_cache[name]) return _cache[name];
+  const ic = ICONS[name];
+  if (!ic) throw new Error('unknown icon: ' + name);
+  const subs = ic.p.map(d => {
+    const el = document.createElementNS(_svgNS, 'path');
+    el.setAttribute('d', d);
+    _measure.appendChild(el);
+    return { d, len: el.getTotalLength(), path2d: new Path2D(d) };
+  });
+  const total = subs.reduce((a, s) => a + s.len, 0);
+  _cache[name] = { subs, total, accent: new Set(ic.accent || []), fillPath: ic.fillPath };
+  return _cache[name];
+}
+
+/* draw an icon centred at (cx,cy), `size` px across the 100-box.
+   opts: { draw   0..1  draw-on progress (1 = fully drawn)
+           fill   0..1  accent fill-rise height inside fillPath
+           alpha, lw, color, accentColor, glow } */
+function icon(name, cx, cy, size, opts){
+  const o = opts || {};
+  const D = iconData(name);
+  const k = size / 100;
+  const p = o.draw === undefined ? 1 : clamp01(o.draw);
+  const lw = (o.lw || 3) / k;
+
+  x.save();
+  x.globalAlpha = o.alpha === undefined ? 1 : o.alpha;
+  x.translate(cx - size/2, cy - size/2);
+  x.scale(k, k);
+  x.lineWidth = lw; x.lineCap = 'round'; x.lineJoin = 'round';
+  if (o.glow) glow(o.glow, 18 / k);
+
+  /* accent fill rising inside the icon's closed path */
+  if (o.fill > 0 && D.fillPath !== undefined){
+    x.save();
+    x.clip(D.subs[D.fillPath].path2d);
+    x.fillStyle = o.accentColor || T.accent;
+    const h = 100 * clamp01(o.fill);
+    x.fillRect(0, 100 - h, 100, h);
+    x.restore();
+  }
+
+  /* draw-on, distributed across sub-paths by true arc length */
+  let drawn = D.total * p;
+  for (let i = 0; i < D.subs.length; i++){
+    const s = D.subs[i];
+    if (drawn <= 0) break;
+    const seen = Math.min(s.len, drawn);
+    drawn -= seen;
+    x.strokeStyle = D.accent.has(i) ? (o.accentColor || T.accent) : (o.color || T.text);
+    if (seen < s.len - 0.01){
+      x.setLineDash([s.len, s.len]);
+      x.lineDashOffset = s.len - seen;
+    } else {
+      x.setLineDash([]);
+    }
+    x.stroke(s.path2d);
+  }
+  x.setLineDash([]);
+  noGlow();
+  x.restore();
+}
+window.icon = icon;
+
+/* ============================================================
    THE SCENE
    One continuous particle system across the whole runtime, so
    there is never a cut. Phases retarget the same objects.
