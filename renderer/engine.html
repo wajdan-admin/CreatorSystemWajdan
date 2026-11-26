@@ -168,116 +168,150 @@ function icon(name, cx, cy, size, opts){
 window.icon = icon;
 
 /* ============================================================
-   THE SCENE
-   One continuous particle system across the whole runtime, so
-   there is never a cut. Phases retarget the same objects.
+   SCENARIOS
+   Each scenario is one continuous system: the objects on screen
+   persist and transform, so a reel renders with zero hard cuts.
+   A scene JSON picks one by name.
    ============================================================ */
-const N = S.particles || 40;
+const PH = S.phases;
 
-/* per-particle constants, stable for the whole render */
+/* ---------- v1: abstract particle sort (first demo) ---------- */
+const N = S.particles || 40;
 const P = [];
 for (let i = 0; i < N; i++){
   const ang = (i / N) * Math.PI * 2 + rnd(i,1) * 0.35;
   const rad = 150 + rnd(i,2) * 120;
-  P.push({
-    i,
-    startX: rnd(i,3) * W,
-    startY: -60 - rnd(i,4) * 700,          // staggered above frame
-    clusterX: W/2 + Math.cos(ang) * rad * 0.9,
-    clusterY: H/2 + Math.sin(ang) * rad * 0.55,
-    fallDelay: rnd(i,5) * 0.9,
-    r: 7 + rnd(i,6) * 5,
-    keep: false                             // set below
-  });
+  P.push({ i, startX: rnd(i,3)*W, startY: -60 - rnd(i,4)*700,
+    clusterX: W/2 + Math.cos(ang)*rad*0.9, clusterY: H/2 + Math.sin(ang)*rad*0.55,
+    fallDelay: rnd(i,5)*0.9, r: 7 + rnd(i,6)*5, keep: false });
 }
-/* the three that stay qualified: spread them out visually */
-[3, 17, 29].forEach(k => { if(P[k]) P[k].keep = true; });
+[3,17,29].forEach(k => { if(P[k]) P[k].keep = true; });
 const KEEP = P.filter(p => p.keep);
-const DROP = P.filter(p => !p.keep);
 
-/* phase boundaries (seconds) */
-const PH = S.phases;
+function scenarioParticles(t){
+  const cxm = W/2, cym = H/2;
+  for (const p of P){
+    const pin = seg(t, PH.rainStart + p.fallDelay, PH.rainStart + p.fallDelay + 1.1, 'outQuint');
+    let px = lerp(p.startX, p.clusterX, pin), py = lerp(p.startY, p.clusterY, pin);
+    let alpha = pin > 0 ? 1 : 0, r = p.r, fill = T.accent;
+    const sort = seg(t, PH.sortStart, PH.sortStart + 0.7, 'inOut');
+    if (!p.keep && sort > 0){ fill = T.dim; alpha = lerp(1,0.55,sort); r = lerp(p.r, p.r*0.78, sort); }
+    if (!p.keep){
+      const out = seg(t, PH.dropStart + rnd(p.i,7)*0.45, PH.dropStart + 1.0 + rnd(p.i,7)*0.45, 'inCubic');
+      py += out * (H*0.9); alpha *= (1-out);
+    } else {
+      const k = KEEP.indexOf(p);
+      const conv = seg(t, PH.convStart, PH.convStart + 1.0, 'inOut');
+      px = lerp(px, cxm, conv); py = lerp(py, cym, conv);
+      const merge = seg(t, PH.convStart + 0.75, PH.convStart + 1.35, 'outBack');
+      r = lerp(r, 62/KEEP.length, merge);
+      if (merge > 0 && k !== 0) alpha = lerp(alpha, 0, seg(t, PH.convStart+0.9, PH.convStart+1.2,'outCubic'));
+    }
+    if (alpha > 0.002){
+      if (p.keep && t > PH.convStart) glow(T.accent, 26);
+      dot(px, py, r, fill, alpha); noGlow();
+    }
+  }
+  if (t >= PH.convStart + 0.75){
+    const grow = seg(t, PH.convStart + 0.75, PH.convStart + 1.4, 'outBack');
+    glow(T.accent, 34); dot(cxm, cym, lerp(10,66,grow), T.accent, 1); noGlow();
+    const pr = seg(t, PH.convStart + 1.15, PH.convStart + 2.1, 'outCubic');
+    if (pr > 0 && pr < 1) ring(cxm, cym, lerp(66,185,pr), T.accent, 2.5, (1-pr)*0.55);
+  }
+}
+
+/* ---------- v2: leads -> full calendar -> drain -> one real call ----------
+   The same twelve marks are the leads, the calendar's booked slots and
+   finally the one call that lands. Nothing is ever cut away. */
+const CAL = { cx: W/2, cy: H*0.47, size: 300 };
+const icoX = v => CAL.cx + (v-50)*(CAL.size/100);
+const icoY = v => CAL.cy + (v-50)*(CAL.size/100);
+
+const LEADS = [];
+(function(){
+  const cols=[26,42,58,74], rows=[54,68,82]; let i=0;
+  for (const iy of rows) for (const ix of cols){
+    LEADS.push({ i,
+      gx: icoX(ix), gy: icoY(iy),
+      sx: 90 + rnd(i,11)*(W-180), sy: -70 - rnd(i,12)*620,
+      hx: W/2 + (rnd(i,13)-0.5)*400, hy: H*0.47 + (rnd(i,14)-0.5)*320,
+      delay: rnd(i,15)*0.75, keep: i === 6 });
+    i++;
+  }
+})();
+
+const snapDone = t => seg(t, PH.snap, PH.snap + 0.8, 'inOut') > 0.6;
+
+function scenarioCalendar(t){
+  const calDraw = seg(t, PH.calDraw, PH.calDraw + 0.85, 'outCubic');
+  const calFill = seg(t, PH.calFill, PH.calFill + 0.85, 'inOut')
+                * (1 - seg(t, PH.drain, PH.drain + 0.9, 'inOut'));
+  const calFade = 1 - seg(t, PH.calOut, PH.calOut + 0.7, 'inOut');
+
+  if (calDraw > 0 && calFade > 0.01)
+    icon('calendar', CAL.cx, CAL.cy, CAL.size,
+         { draw: calDraw, fill: calFill * 0.56, alpha: calFade, lw: 3 });
+
+  for (const L of LEADS){
+    const inP  = seg(t, PH.rain + L.delay, PH.rain + L.delay + 1.0, 'outQuint');
+    const snap = seg(t, PH.snap, PH.snap + 0.8, 'inOut');
+    let px = lerp(lerp(L.sx, L.hx, inP), L.gx, snap);
+    let py = lerp(lerp(L.sy, L.hy, inP), L.gy, snap);
+    let a = inP > 0 ? 1 : 0, r = 7.5, fill = T.accent;
+
+    /* once the amber has risen past a slot, the mark inverts to the
+       background so it reads as an occupied slot, not a lost dot */
+    const fillTopY = icoY(100 - 56 * calFill);
+    if (calFill > 0.02 && L.gy > fillTopY && snapDone(t)) fill = T.bg;
+
+    if (!L.keep){
+      const grey = seg(t, PH.drain, PH.drain + 0.6, 'inOut');
+      if (grey > 0){ fill = T.dim; a *= lerp(1, 0.55, grey); }
+      const out = seg(t, PH.fall + rnd(L.i,16)*0.5, PH.fall + 1.1 + rnd(L.i,16)*0.5, 'inCubic');
+      py += out * H * 0.8; a *= (1 - out);
+    } else {
+      const toPhone = seg(t, PH.phone, PH.phone + 0.9, 'inOut');
+      px = lerp(px, W/2, toPhone); py = lerp(py, H*0.47, toPhone);
+      r  = lerp(7.5, 0, seg(t, PH.phone + 0.5, PH.phone + 0.95, 'inOut'));
+      if (t > PH.phone) glow(T.accent, 20);
+    }
+    if (a > 0.002) dot(px, py, r, fill, a);
+    noGlow();
+  }
+
+  const phDraw = seg(t, PH.phone + 0.25, PH.phone + 1.15, 'outCubic');
+  if (phDraw > 0){
+    const settle = seg(t, PH.phone + 1.0, PH.phone + 1.8, 'outElastic');
+    const pop = 1 + 0.05 * (1 - settle);
+    icon('phone', W/2, H*0.47, 230 * pop,
+         { draw: phDraw, color: T.accent, accentColor: T.accent, lw: 3.4,
+           glow: t > PH.phone + 1.0 ? T.accent : null });
+    const pr = seg(t, PH.phone + 1.15, PH.phone + 2.4, 'outCubic');
+    if (pr > 0 && pr < 1) ring(W/2, H*0.47, lerp(120, 270, pr), T.accent, 2.5, (1-pr)*0.5);
+  }
+}
+
+const SCENARIOS = { 'particles-v1': scenarioParticles, 'calendar-v2': scenarioCalendar };
 
 function draw(t){
-  /* background */
   x.fillStyle = T.bg; x.fillRect(0,0,W,H);
 
-  /* ---------- captions ---------- */
   for (const b of S.beats){
     if (t >= b.start && t < b.end){
       const lt = t - b.start, span = b.end - b.start;
-      caption(b.top,    TOP_Y, lt, span, T.text, b.size || 25);
-      caption(b.bottom, BOT_Y, lt, span, b.bottomColor === 'accent' ? T.accent
-                                        : b.bottomColor === 'secondary' ? T.secondary
-                                        : T.text, b.size || 25);
+      caption(b.top,    TOP_Y, lt, span, T.text, b.size || 27);
+      caption(b.bottom, BOT_Y, lt, span,
+        b.bottomColor === 'accent' ? T.accent :
+        b.bottomColor === 'secondary' ? T.secondary : T.text, b.size || 27);
     }
   }
 
-  const cxm = W/2, cym = H/2;
+  (SCENARIOS[S.scenario] || scenarioParticles)(t);
 
-  /* ---------- particles ---------- */
-  for (const p of P){
-    /* PHASE 1 — rain in to cluster */
-    const pin = seg(t, PH.rainStart + p.fallDelay, PH.rainStart + p.fallDelay + 1.1, 'outQuint');
-    let px = lerp(p.startX, p.clusterX, pin);
-    let py = lerp(p.startY, p.clusterY, pin);
-    let alpha = pin > 0 ? 1 : 0;
-    let r = p.r;
-    let fill = T.accent;
-
-    /* PHASE 2 — sort: the unqualified drain of colour */
-    const sort = seg(t, PH.sortStart, PH.sortStart + 0.7, 'inOut');
-    if (!p.keep && sort > 0){
-      fill = T.dim;
-      alpha = lerp(1, 0.55, sort);
-      r = lerp(p.r, p.r * 0.78, sort);
-    }
-
-    /* PHASE 3 — the unqualified fall out of frame */
-    if (!p.keep){
-      const out = seg(t, PH.dropStart + rnd(p.i,7)*0.45, PH.dropStart + 1.0 + rnd(p.i,7)*0.45, 'inCubic');
-      py += out * (H * 0.9);
-      alpha *= (1 - out);
-    }
-
-    /* PHASE 4 — the three that stay converge to centre and merge */
-    if (p.keep){
-      const k = KEEP.indexOf(p);
-      const conv = seg(t, PH.convStart, PH.convStart + 1.0, 'inOut');
-      px = lerp(px, cxm, conv);
-      py = lerp(py, cym, conv);
-      /* grow into one mass as they land */
-      const merge = seg(t, PH.convStart + 0.75, PH.convStart + 1.35, 'outBack');
-      r = lerp(r, 62 / KEEP.length, merge);
-      if (merge > 0 && k !== 0) alpha = lerp(alpha, 0, seg(t, PH.convStart+0.9, PH.convStart+1.2,'outCubic'));
-    }
-
-    if (alpha > 0.002){
-      if (p.keep && t > PH.convStart) { glow(T.accent, 26); }
-      dot(px, py, r, fill, alpha);
-      noGlow();
-    }
-  }
-
-  /* ---------- the merged mass + end card ---------- */
-  if (t >= PH.convStart + 0.75){
-    const grow = seg(t, PH.convStart + 0.75, PH.convStart + 1.4, 'outBack');
-    const R = lerp(10, 66, grow);
-    glow(T.accent, 34);
-    dot(cxm, cym, R, T.accent, 1);
-    noGlow();
-    /* one clean ring pulses out — the "qualified call" landing */
-    const pr = seg(t, PH.convStart + 1.15, PH.convStart + 2.1, 'outCubic');
-    if (pr > 0 && pr < 1) ring(cxm, cym, lerp(66, 185, pr), T.accent, 2.5, (1-pr)*0.55);
-  }
-
-  /* handle, last beat only */
   if (t >= PH.endStart){
     const a = seg(t, PH.endStart, PH.endStart + 0.5, 'outCubic');
-    x.save();
-    x.globalAlpha = a;
-    x.fillStyle = T.secondary;
-    x.font = `500 21px Inter, Poppins, sans-serif`;
+    x.save(); x.globalAlpha = a; x.fillStyle = T.secondary;
+    x.font = '500 21px Inter, Poppins, sans-serif';
     if ('letterSpacing' in x) x.letterSpacing = '2px';
     x.textAlign = 'center'; x.textBaseline = 'middle';
     x.fillText(T.handle, W/2, H * 0.88);

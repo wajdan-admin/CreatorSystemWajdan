@@ -1,0 +1,34 @@
+{
+  "name": "demo-qualified-calls-v2",
+  "scenario": "calendar-v2",
+  "duration": 10.0,
+  "phases": {
+    "rain":     0.10,
+    "snap":     2.45,
+    "calDraw":  2.55,
+    "calFill":  3.35,
+    "drain":    4.35,
+    "fall":     4.75,
+    "calOut":   5.75,
+    "phone":    6.25,
+    "endStart": 8.40
+  },
+  "beats": [
+    { "start": 0.15, "end": 2.55, "top": "Anyone can get you", "bottom": "Leads",
+      "vo": "Anyone can get you leads.", "voAt": 0.30 },
+    { "start": 2.60, "end": 4.25, "top": "A full calendar", "bottom": "Is not a good calendar",
+      "vo": "A full calendar is not a good calendar.", "voAt": 2.70 },
+    { "start": 4.30, "end": 6.15, "top": "Most of them", "bottom": "Never pick up",
+      "vo": "Most of them never pick up.", "voAt": 4.40 },
+    { "start": 6.20, "end": 8.25, "top": "We get you", "bottom": "Qualified calls",
+      "bottomColor": "accent",
+      "vo": "We get you qualified calls.", "voAt": 6.30 }
+  ],
+  "voice": {
+    "provider": "elevenlabs",
+    "voice_id": "q0Md0WjtKGPg5BnlQQES",
+    "name": "Wajahat Voice",
+    "model": "eleven_multilingual_v2",
+    "settings": { "stability": 0.45, "similarity_boost": 0.8, "style": 0.25, "use_speaker_boost": true }
+  }
+}
