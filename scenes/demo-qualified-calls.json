@@ -1,0 +1,18 @@
+{
+  "name": "demo-qualified-calls",
+  "duration": 10.0,
+  "particles": 40,
+  "phases": {
+    "rainStart": 0.10,
+    "sortStart": 2.60,
+    "dropStart": 4.30,
+    "convStart": 6.20,
+    "endStart":  8.30
+  },
+  "beats": [
+    { "start": 0.15, "end": 2.55, "top": "Anyone can get you",  "bottom": "Leads" },
+    { "start": 2.60, "end": 4.25, "top": "A full calendar",     "bottom": "Is not a good calendar" },
+    { "start": 4.30, "end": 6.15, "top": "Most of them",        "bottom": "Never pick up" },
+    { "start": 6.20, "end": 8.25, "top": "We get you",          "bottom": "Qualified calls", "bottomColor": "accent" }
+  ]
+}
